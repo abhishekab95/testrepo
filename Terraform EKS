@@ -1,0 +1,118 @@
+provider "aws" {
+  region     = "us-east-2"
+}
+
+variable "worker_node_instance_type" {
+  default = "t2.small"
+}
+
+variable "worker_node_volume_size" {
+  default = 20
+}
+
+variable "worker_node_desired_capacity" {
+  default = 1
+}
+
+variable "worker_node_min_size" {
+  default = 1
+}
+
+variable "worker_node_max_size" {
+  default = 2
+}
+
+locals {
+  abhishek-eks-tags = "${map("Name", "abhishek-eks-test-cluster"
+  )}"
+
+  abhishek-eks-test-cluster-vpc-worker_groups = "${list(
+                  map("instance_type","${var.worker_node_instance_type}",
+                    "ami_id","${var.ami_id}",
+                    "asg_desired_capacity",1,
+                    "asg_min_size",1,
+                    "asg_max_size",2,
+                    "root_volume_size", "${var.worker_node_volume_size}",
+                    "autoscaling_enabled", true,
+                    "protect_from_scale_in", true,
+                    "kubelet_extra_args", "--node-labels=function=autoscaling_test,falco=enabled,kubernetes.io/role=autoscaling_test",
+                    "name", "abhishekeks-autoscaling-test",
+                    "key_name", "abhishek-test",
+                      ),
+                  map("instance_type","${var.worker_node_instance_type}",
+                    "ami_id","${var.ami_id}",
+                    "asg_desired_capacity",0,
+                    "asg_min_size",0,
+                    "asg_max_size",2,
+                    "root_volume_size", "${var.worker_node_volume_size}",
+                    "autoscaling_enabled", true,
+                    "protect_from_scale_in", true,
+                    "kubelet_extra_args", "--node-labels=function=autoscaling_test_two,falco=enabled,kubernetes.io/role=autoscaling_test_two",
+                    "name", "abhishekeks-autoscaling-test-two",
+                    "key_name", "abhishek-test",
+                      ),
+  )}"
+  abhishek-eks-test-cluster-worker_group_tags = {
+     abhishekeks-autoscaling-test-two = [
+       {
+         key                 = "k8s.io/cluster-autoscaler/node-template/label/function"
+         value               = "autoscaling_test_two"
+         propagate_at_launch = true
+       }
+     ],
+     "default" = []
+  }
+}
+
+module "abhishek-eks-test-cluster-vpc" {
+
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "1.46.0"
+
+  name = "abhishek-eks-test-cluster-network-boundry"
+
+  cidr = "10.1.0.0/16"
+
+  azs = [
+    "${element(var.aws_availability_zones["us-east-2"], 0)}",
+    "${element(var.aws_availability_zones["us-east-2"], 2)}",
+    "${element(var.aws_availability_zones["us-east-2"], 3)}",
+  ]
+
+  private_subnets = []
+  public_subnets  = ["10.1.0.0/18", "10.1.64.0/18", "10.1.128.0/18"]
+
+  public_subnet_tags = {
+    subnet_type = "public"
+  }
+
+  enable_nat_gateway = false
+
+  enable_dns_hostnames = true
+
+  tags = "${merge(local.abhishek-eks-tags, map(
+    "kubernetes.io/cluster/abhishek-eks-test-cluster",
+    "shared"
+    ))}"
+}
+
+module "abhishek-eks-test-cluster-mod" {
+  source             = "terraform-aws-modules/eks/aws"
+  version            = "2.2.1"
+
+  cluster_name       = "abhishek-eks-test-cluster"
+  cluster_version    = "1.11"
+
+  vpc_id             = "${module.abhishek-eks-test-cluster-vpc.vpc_id}"
+  subnets            = "${module.abhishek-eks-test-cluster-vpc.public_subnets}"
+
+  worker_group_count = 2
+  worker_groups      = "${local.abhishek-eks-test-cluster-vpc-worker_groups}"
+  worker_group_tags  = "${local.abhishek-eks-test-cluster-worker_group_tags}"
+
+  tags               = "${local.abhishek-eks-tags}"
+
+  map_users          = "${var.map_users}"
+
+  config_output_path = ".kube_config/"
+}
